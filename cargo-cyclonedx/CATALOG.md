@@ -37,17 +37,6 @@ The mirrored archives also carry upstream's `LICENSE`, `README.md` and
 > the default target. It is a plugin for an existing Rust installation, not a
 > standalone SBOM scanner.
 
-## Install with ocx
-
-```sh
-ocx install ocx.sh/cyclonedx/cargo-cyclonedx
-```
-
-```sh
-# or pin a specific version
-ocx install ocx.sh/cyclonedx/cargo-cyclonedx:0.5.9
-```
-
 ## Links
 
 - [cyclonedx-rust-cargo on GitHub](https://github.com/CycloneDX/cyclonedx-rust-cargo)
