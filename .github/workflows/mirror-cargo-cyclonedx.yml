@@ -6,7 +6,7 @@ name: cargo-cyclonedx
 
 on:
   schedule:
-    - cron: '45 */6 * * *'
+    - cron: '48 1-23/6 * * *'
   workflow_dispatch:
   push:
     branches: [main]
