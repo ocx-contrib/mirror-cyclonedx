@@ -142,9 +142,10 @@ assets:
     - "^cargo-cyclonedx-x86_64-apple-darwin\\.tar\\.xz$"
   darwin/arm64:
     - "^cargo-cyclonedx-aarch64-apple-darwin\\.tar\\.xz$"
-  # ── PASS 3 (windows) — staged ──────────────────────────────────────────────
-  # windows/amd64:
-  #   - "^cargo-cyclonedx-x86_64-pc-windows-msvc\\.zip$"
+  # ── PASS 3 (windows) — LANDED. The ONLY windows asset upstream ships; there
+  #    is no aarch64-pc-windows-msvc sibling, so there is no windows/arm64 key.
+  windows/amd64:
+    - "^cargo-cyclonedx-x86_64-pc-windows-msvc\\.zip$"
 
 # ⚠ THE ARCHIVE LAYOUT DIFFERS BETWEEN UNIX AND WINDOWS. This is not a style
 # choice — applying one strip value to both would silently destroy one of them.
@@ -181,9 +182,7 @@ asset_type:
     type: archive
     strip_components: 1
   platforms:
-    # ── PASS 3 (windows) — staged alongside the assets/platforms keys. The
-    # override is inert while windows/amd64 is undeclared, but it is written now
-    # so the pass-3 edit cannot forget it.
+    # ── PASS 3 (windows) — LANDED alongside the assets/platforms keys. ────────
     windows/amd64:
       type: archive
       strip_components: 0

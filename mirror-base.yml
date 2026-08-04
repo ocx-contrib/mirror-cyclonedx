@@ -160,10 +160,10 @@ platforms:
   darwin/arm64:
     runner: macos-14
     shell: bash
-  # ── PASS 3 (windows) — staged, uncomment together with the `assets:` key ───
-  # windows/amd64:
-  #   runner: windows-latest
-  #   shell: pwsh
+  # ── PASS 3 (windows) — LANDED. amd64 only; upstream ships no aarch64 PE. ───
+  windows/amd64:
+    runner: windows-latest
+    shell: pwsh
   #
   # No `containers:` on darwin or windows — those runners have no Linux
   # container engine, and the key is rejected at spec load. Those legs run
