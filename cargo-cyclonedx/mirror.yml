@@ -1,0 +1,259 @@
+# ⚠ `extends:` is a SHALLOW merge of TOP-LEVEL KEYS. Setting a key here
+# REPLACES the base's block outright — there is no per-key merge. `platforms:`
+# is deliberately NOT restated below: it carries the container legs that make
+# this spec's Linux keys honest (and the `setup:` lines that provision cargo),
+# and restating it to tweak one runner would drop them all without reddening
+# anything.
+extends: ../mirror-base.yml
+
+name: cargo-cyclonedx
+
+# Logical index package `cyclonedx/cargo-cyclonedx` at the physical path
+# `ghcr.io/ocx-contrib/cyclonedx/cargo-cyclonedx` — slash segments, never
+# hyphen-flattened. Two segments always. `cyclonedx` is the project's own brand
+# and GitHub org (namespace rule 2: the org IS the project brand), lowercased
+# from upstream's `CycloneDX`. The package segment is the name the project
+# publishes under — the crate, the binary and the cargo subcommand are all
+# `cargo-cyclonedx`.
+#
+# The first path segment of `target.repository` must be this repo's own GitHub
+# owner: GITHUB_TOKEN only authorises packages owned by the repo the workflow
+# runs in.
+target:
+  registry: ghcr.io
+  repository: ocx-contrib/cyclonedx/cargo-cyclonedx
+
+source:
+  # ⚠ THE UPSTREAM REPO IS NOT NAMED AFTER THE PACKAGE. `cargo-cyclonedx` is one
+  # crate inside the `cyclonedx-rust-cargo` WORKSPACE, which also holds the
+  # `cyclonedx-bom` library and `cyclonedx-bom-macros`.
+  type: github_release
+  owner: CycloneDX
+  repo: cyclonedx-rust-cargo
+  # ⚠ TAG TRAP — THREE tag schemes share this repository and only one is ours.
+  # Verified against the full release list:
+  #
+  #   $ gh api 'repos/CycloneDX/cyclonedx-rust-cargo/releases?per_page=100' \
+  #       --jq '.[].tag_name'
+  #   cyclonedx-bom-0.8.1        ← the LIBRARY crate: separate cadence, its own
+  #   cargo-cyclonedx-0.5.9        versions, and exactly ONE asset (source only)
+  #   cargo-cyclonedx-0.5.8
+  #   cargo-cyclonedx-0.5.7
+  #   cyclonedx-bom-0.8.0
+  #   …
+  #   0.1.0                      ← legacy pre-workspace-split tag, 0 assets
+  #
+  # There is NO `v` prefix on either scheme. Anchoring the literal
+  # `cargo-cyclonedx-` prefix is what keeps the 14 `cyclonedx-bom-*` tags and the
+  # bare legacy tags out; a naive `^(?P<version>\d+\.\d+\.\d+)$` would match
+  # `0.1.0` (an assetless release) and a loose pattern would sweep in the
+  # library's versions, which are a different product entirely.
+  tag_pattern: "^cargo-cyclonedx-(?P<version>\\d+\\.\\d+\\.\\d+)$"
+
+# ─── libc gate (Phase 3.5) — the evidence, not the conclusion ───────────────
+#
+# ⚠ THE TWO LINUX KEYS DELIBERATELY DIFFER IN SHAPE. That is a measured result:
+# upstream ships both `-gnu` and `-musl` for x86_64 but `-gnu` ONLY for aarch64
+# (no `aarch64-unknown-linux-musl` asset exists in any release), so the arches
+# genuinely have different host requirements. Measured on BOTH in-range versions
+# (0.5.9 and the 0.5.8 floor):
+#
+#   $ file cargo-cyclonedx-x86_64-unknown-linux-musl/cargo-cyclonedx
+#   ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), static-pie linked,
+#   BuildID[sha1]=4ae4ca86…, not stripped                 # 0.5.9
+#   … static-pie linked, BuildID[sha1]=4178f389…          # 0.5.8
+#   $ readelf -l …/cargo-cyclonedx | grep -c INTERP   → 0   (both versions)
+#   $ readelf -d …/cargo-cyclonedx | grep NEEDED      → (none, both versions)
+#
+#   $ file cargo-cyclonedx-aarch64-unknown-linux-gnu/cargo-cyclonedx
+#   ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically
+#   linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 3.7.0
+#   $ readelf -l …/cargo-cyclonedx | grep -c INTERP   → 1   (both versions)
+#   $ readelf -d …/cargo-cyclonedx | grep NEEDED      → libgcc_s.so.1, libc.so.6
+#   $ readelf -V …/cargo-cyclonedx | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
+#   GLIBC_2.34                                            (both versions)
+#
+# NOT UPX-packed — the packer stub leaves no PT_INTERP and no section headers,
+# which would make `file` call even a glibc-dynamic build "statically linked"
+# and turn the INTERP count above into a false universality claim:
+#   $ strings -a …/cargo-cyclonedx | grep -c '^UPX'   → 0   (all six binaries)
+#   $ readelf -h …/cargo-cyclonedx | grep 'Start of section headers'
+#     Start of section headers: 7173768 (bytes into file) # non-zero ⇒ not UPX
+#
+# Verdict, per Phase 3.5:
+#   x86_64  → no PT_INTERP, no DT_NEEDED: musl is linked IN, not linked AGAINST.
+#             The artifact requires NOTHING of the host, so the key is BARE.
+#             Tagging it `+libc.musl` would be a false requirement that hid it
+#             from every glibc host it in fact runs on. Proven live under
+#             `docker run alpine:3.20` before this spec was written.
+#   aarch64 → PT_INTERP present and libc.so.6 in DT_NEEDED: it genuinely
+#             requires glibc, so `+libc.glibc` is correct and NECESSARY.
+#
+# Only ONE key per arch, not two. The x86_64 `-gnu` asset was measured too
+# (dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, NEEDED
+# libgcc_s.so.1 + libc.so.6 + ld-linux-x86-64.so.2, GLIBC_2.34) and is
+# deliberately NOT carried: the static musl build already runs under BOTH
+# userlands, and the usual reason to ship a second gnu key — musl's resolver
+# ignoring nsswitch.conf — cannot apply here. cargo-cyclonedx performs no name
+# resolution at all: it reads a Cargo manifest off local disk, shells out to
+# `cargo metadata`, and writes a file. Two keys is the fallback, not the goal.
+#
+# ─── Scope (verified BOTH ways on the WHOLE in-range set: 0.5.8 and 0.5.9) ───
+#
+# Every pattern below was grepped against the full asset list of both in-range
+# releases and matched EXACTLY ONE asset in each. A pattern matching zero is
+# SILENTLY SKIPPED, not an error — it would yield a green run with a missing
+# platform. Both releases ship an identical 18-asset set.
+#
+# ⚠ THE ASSET NAMES CARRY NO VERSION. `cargo-cyclonedx-x86_64-unknown-linux-gnu
+# .tar.xz` is the filename in every release, so the patterns are fully literal
+# and cannot drift with the version. It also means the name can never disagree
+# with its tag (the vivid failure mode) — but the binary's self-reported version
+# was checked against the tag on both releases anyway:
+#   $ ./cargo-cyclonedx cyclonedx --version
+#   cargo-cyclonedx-cyclonedx 0.5.9   # from the cargo-cyclonedx-0.5.9 assets
+#   cargo-cyclonedx-cyclonedx 0.5.8   # from the cargo-cyclonedx-0.5.8 assets
+#
+# Upstream also publishes, and this mirror deliberately does not carry:
+#   *.tar.xz.sha256 / *.zip.sha256  — per-asset checksum sidecars. The `$`
+#                                     anchor after `\.tar\.xz` / `\.zip`
+#                                     excludes them.
+#   sha256.sum                      — aggregate checksum file.
+#   dist-manifest.json              — cargo-dist's own build manifest.
+#   cargo-cyclonedx-installer.sh    — curl|sh / irm|iex bootstrap scripts, not
+#   cargo-cyclonedx-installer.ps1     portable archives.
+#   source.tar.gz (+ .sha256)       — source tarball, not a built artifact.
+#
+# There is NO windows/arm64 platform in this mirror and none staged for later:
+# upstream ships exactly one Windows asset, `x86_64-pc-windows-msvc.zip`, in
+# every release. `aarch64-pc-windows-msvc` has never existed here. Five OCX
+# platforms, not six.
+#
+# ⚠ STAGED ROLLOUT — darwin/windows keys are commented here AND in
+# ../mirror-base.yml's `platforms:` block; both halves get uncommented together,
+# one pass at a time, with `generate ci` re-run each pass.
+assets:
+  linux/amd64:
+    - "^cargo-cyclonedx-x86_64-unknown-linux-musl\\.tar\\.xz$"
+  "linux/arm64+libc.glibc":
+    - "^cargo-cyclonedx-aarch64-unknown-linux-gnu\\.tar\\.xz$"
+  # ── PASS 2 (darwin) — staged ───────────────────────────────────────────────
+  # darwin/amd64:
+  #   - "^cargo-cyclonedx-x86_64-apple-darwin\\.tar\\.xz$"
+  # darwin/arm64:
+  #   - "^cargo-cyclonedx-aarch64-apple-darwin\\.tar\\.xz$"
+  # ── PASS 3 (windows) — staged ──────────────────────────────────────────────
+  # windows/amd64:
+  #   - "^cargo-cyclonedx-x86_64-pc-windows-msvc\\.zip$"
+
+# ⚠ THE ARCHIVE LAYOUT DIFFERS BETWEEN UNIX AND WINDOWS. This is not a style
+# choice — applying one strip value to both would silently destroy one of them.
+# Measured on 0.5.9 AND 0.5.8:
+#
+#   $ tar tvf cargo-cyclonedx-x86_64-unknown-linux-gnu.tar.xz
+#   drwxr-xr-x  cargo-cyclonedx-x86_64-unknown-linux-gnu/
+#   -rw-r--r--  cargo-cyclonedx-x86_64-unknown-linux-gnu/LICENSE
+#   -rw-r--r--  cargo-cyclonedx-x86_64-unknown-linux-gnu/CHANGELOG.md
+#   -rw-r--r--  cargo-cyclonedx-x86_64-unknown-linux-gnu/README.md
+#   -rwxr-xr-x  cargo-cyclonedx-x86_64-unknown-linux-gnu/cargo-cyclonedx
+#                                          ↑ WRAPPER DIR ⇒ strip_components: 1
+#
+#   $ unzip -l cargo-cyclonedx-x86_64-pc-windows-msvc.zip
+#     5664256  cargo-cyclonedx.exe
+#       10992  CHANGELOG.md
+#       11542  LICENSE
+#        5589  README.md
+#                                          ↑ FLAT, NO WRAPPER ⇒ strip_components: 0
+#
+# Applying `strip_components: 1` to the flat zip would DELETE cargo-cyclonedx.exe
+# and hoist nothing in its place — a bundle that ships three markdown files and
+# no binary. The per-platform override is what prevents that.
+#
+# strip_components: 1 on the tarballs is FORCED, not chosen: the wrapper's name
+# embeds the target TRIPLE, so `strip_components: 0` would need a PATH of
+# `${installPath}/cargo-cyclonedx-x86_64-unknown-linux-musl` — a value that
+# differs per platform and could not be written in one metadata.json. Stripping
+# it puts the executable at the content root, which is exactly where the flat
+# zip already puts it. Both layouts therefore converge on ONE metadata.json with
+# a bare `${installPath}` PATH.
+asset_type:
+  default:
+    type: archive
+    strip_components: 1
+  platforms:
+    # ── PASS 3 (windows) — staged alongside the assets/platforms keys. The
+    # override is inert while windows/amd64 is undeclared, but it is written now
+    # so the pass-3 edit cannot forget it.
+    windows/amd64:
+      type: archive
+      strip_components: 0
+
+# `off` — FORCED by the layout above, not chosen. The scan only inspects an
+# interface-visible `${installPath}/<dir>` PATH entry, and once the wrapper
+# directory is stripped this archive has no subdirectory to point one at, so
+# both `auto` and `verify` fail spec load at exit 65:
+#
+#   bin_scan is enabled but metadata.json declares no interface-visible
+#   ${installPath}/<dir> PATH entry — the verification would inspect no file and
+#   pass green whatever the archive contains.
+#
+# The `binaries` list in metadata.json is therefore hand-maintained, exactly as
+# that error directs. It is short and stable: `cargo-cyclonedx`
+# (`cargo-cyclonedx.exe` on Windows) is the ONLY mode-0755 entry in every
+# archive — LICENSE, CHANGELOG.md and README.md are 0644 data. Quoted so no
+# YAML 1.1 reader folds the bare word into boolean `false`.
+bin_scan: "off"
+
+metadata:
+  default: metadata.json
+
+catalog:
+  logo: logo.svg
+
+versions:
+  # ⚠ 0.5.8, NOT the literal third-most-recent release. 0.5.7 ships 15 assets
+  # and is MISSING `aarch64-unknown-linux-gnu` entirely:
+  #
+  #   $ for t in 0.5.7 0.5.8 0.5.9; do gh api \
+  #       repos/CycloneDX/cyclonedx-rust-cargo/releases/tags/cargo-cyclonedx-$t \
+  #       --jq '[.assets[].name] | map(select(test("aarch64-unknown-linux-gnu\\.tar\\.xz$"))) | length'; done
+  #     0.5.7 → 0     0.5.8 → 1     0.5.9 → 1
+  #
+  # A floor of 0.5.7 would leave linux/arm64 resolving zero assets at the oldest
+  # in-range version — silently skipped, not an error. 0.5.8 and 0.5.9 have
+  # identical 18-asset sets and full platform parity.
+  #
+  # (The recon sheet also claimed 0.5.7 lacked `x86_64-unknown-linux-musl`. That
+  # is WRONG — 0.5.7 does ship it. Only the aarch64 gnu build is missing, and
+  # that alone is sufficient to set the floor at 0.5.8.)
+  #
+  # Cadence note: 0.5.7 (2024-11-30) → 0.5.8 (2026-03-12) is a ~15.5-month
+  # dormancy, then 0.5.8 → 0.5.9 in 7 days. Only two versions are in range today.
+  min: "0.5.8"
+  new_per_run: 5
+  # Without this the generated workflow only fires on workflow_dispatch + push
+  # and never auto-discovers a new upstream release.
+  poll_interval: "45 */6 * * *"
+
+tests:
+  # `script:` resolves from the REPOSITORY ROOT — unlike `metadata.default` and
+  # `catalog.logo` above, which resolve against this spec's own directory.
+  - name: smoke
+    script: cargo-cyclonedx/tests/smoke.star
+
+annotations:
+  # From the Phase 1.5 license gate. Confirmed against the LICENSE FILE, not
+  # only the API: the repository root LICENSE and cargo-cyclonedx/LICENSE are
+  # both the standard Apache-2.0 full text, byte-identical to each other and to
+  # the LICENSE shipped inside every release archive (11341 bytes on unix).
+  #   $ gh api repos/CycloneDX/cyclonedx-rust-cargo/license --jq '.license.spdx_id'
+  #   Apache-2.0
+  # Cargo.toml uses `license.workspace = true`; the per-crate LICENSE copy is the
+  # standard Rust crates.io packaging convention, not a different grant.
+  org.opencontainers.image.licenses: "Apache-2.0"
+
+announce:
+  # Spelled out, not derived from target.repository — the logical name and the
+  # physical path are related by convention only.
+  package: cyclonedx/cargo-cyclonedx
+  fork: ocx-contrib/index

@@ -1,0 +1,176 @@
+# Shared base for every spec in this repository (currently one: cargo-cyclonedx,
+# the CycloneDX SBOM generator for Cargo projects).
+#
+# NOT a spec: it has no name/target/source and is never loaded on its own.
+# Everything a package owns — name, target, source, assets, asset_type,
+# bin_scan, metadata, catalog, tests, versions, announce, annotations — stays in
+# that package's own mirror.yml.
+#
+# ⚠️ `extends:` is a SHALLOW merge of top-level keys. A spec that sets a key
+# below replaces that block OUTRIGHT — there is no per-key merge. `platforms:`
+# is where this bites: it carries BOTH the runner matrix and the container
+# legs, so a child that restates it to tweak one runner silently drops every
+# `containers:` entry. Nothing reds — the legs simply stop existing, and every
+# os.features claim in that spec goes back to being merely asserted. So
+# `platforms:` lives HERE and cargo-cyclonedx/mirror.yml deliberately does not
+# restate it.
+
+skip_prereleases: true
+cascade: true
+
+# The fleet rule for a new package. A cascade tag (`latest`, `X`, `X.Y`)
+# re-points on every re-publish; without a build segment the new manifest reuses
+# the bare version tag and orphans the prior digest for registry GC, breaking any
+# `@sha256:` pin in a consumer's ocx.lock. The `none` exception applies only
+# where upstream versions ALREADY carry semver build metadata (double-stamping is
+# rejected and silently empties the mirror) — cargo-cyclonedx tags bare semver
+# behind a `cargo-cyclonedx-` prefix (`cargo-cyclonedx-0.5.9` → `0.5.9`), so it
+# does not apply.
+build_timestamp: date
+
+verify:
+  github_asset_digest: true
+
+concurrency:
+  # Assets are ~1.5-2.3 MB single-binary archives plus LICENSE/README/CHANGELOG.
+  max_downloads: 8
+  max_bundles: 4
+  max_pushes: 2
+  rate_limit_ms: 100
+  max_retries: 3
+  compression_threads: 0
+
+# ─── Platform matrix ────────────────────────────────────────────────────────
+#
+# `os.features` states what an artifact REQUIRES OF THE HOST — it is not a label
+# for how it was built, and a musl target TRIPLE is not a musl requirement.
+#
+# THE LINUX MATRIX IS ASYMMETRIC, and that is a MEASURED result, not an
+# oversight. Upstream ships BOTH `-gnu` and `-musl` for x86_64 but `-gnu` ONLY
+# for aarch64 — there is no `aarch64-unknown-linux-musl` asset in any release.
+# So the two Linux keys cannot be the same shape:
+#
+#   linux/amd64             BARE — carries the x86_64 musl build, which is
+#                           byte-verified fully static (no PT_INTERP, no
+#                           DT_NEEDED). It requires nothing of the host.
+#   linux/arm64+libc.glibc  QUALIFIED — the only aarch64 asset is the gnu build,
+#                           which is dynamically linked against
+#                           /lib/ld-linux-aarch64.so.1 + libc.so.6 + libgcc_s.
+#                           It genuinely requires a glibc userland.
+#
+# Full evidence (file / readelf -l / readelf -d / UPX check / GLIBC floor, on
+# BOTH in-range versions and BOTH arches) is above `assets:` in
+# cargo-cyclonedx/mirror.yml. Fleet precedent for an asymmetric matrix:
+# mirror-cocogitto.
+#
+# Container legs follow from the keys, per Phase 8:
+#   - the BARE key claims universality, so it must prove it: ubuntu (glibc) +
+#     alpine (musl) + fedora (a different glibc vintage). The alpine leg IS the
+#     proof — drop it and the universal claim is merely asserted.
+#   - the `+libc.glibc` key drops alpine. A glibc-dynamic binary cannot load
+#     under musl at all, so that leg could only ever red.
+#
+# ─── `containers[].setup`: cargo is a HARD RUNTIME DEPENDENCY ───────────────
+#
+# cargo-cyclonedx reads a Cargo project by SHELLING OUT to `cargo metadata`;
+# there is no in-process manifest parser and no `--offline`-style escape that
+# avoids it. Measured with an empty PATH:
+#
+#   $ env -i PATH=/usr/bin:/bin ./cargo-cyclonedx cyclonedx --format json \
+#       --target x86_64-unknown-linux-gnu
+#   Error: failed to start `cargo metadata`: No such file or directory (os error 2)
+#
+#   # and WITHOUT an explicit --target it needs rustc as well, because the
+#   # default target comes from `rustc -vV`:
+#   $ env -i PATH=/usr/bin:/bin ./cargo-cyclonedx cyclonedx --format json
+#   thread 'main' panicked at cargo-cyclonedx/src/platform.rs:24:10:
+#   Failed to invoke rustc! Is it in your $PATH?
+#
+# None of ubuntu:24.04 / alpine:3.20 / fedora:40 ships cargo, and the bundle
+# does not carry it. Without `setup:` the only container-safe verb would be
+# `--version` and the smoke would prove nothing about real execution — exactly
+# the failure mode the prek/lefthook `git` precedent names. The distro `cargo`
+# package pulls `rustc` with it, so one line per leg covers both deps and no
+# explicit `--target` is needed.
+#
+# Measured cost of provisioning + a full offline SBOM generation, locally under
+# docker: alpine ~7 s, ubuntu ~27 s, fedora ~28 s. Built once per leg, not per
+# version. `CARGO_NET_OFFLINE=true` is set by the smoke (see
+# cargo-cyclonedx/tests/smoke.star) so no leg ever reaches crates.io — the test
+# project declares zero dependencies, so resolution is purely local.
+#
+# ⚠️ ONE COMMAND PER LIST ENTRY. Each entry becomes a single Dockerfile `RUN`
+# handed to the container's own shell unparsed, so `apt-get update &&
+# apt-get install` must be two entries, not one.
+#
+# ⚠️ STAGED ROLLOUT (Phase 10 — linux first, then darwin, then windows).
+# darwin/windows keys are commented out below AND in cargo-cyclonedx/mirror.yml's
+# `assets:` block, and get uncommented one pass at a time. A declared platform
+# with no matching asset regex does NOT quietly self-skip: it boots a real
+# macos-14 / windows runner and reports SUCCESS having tested nothing. Both
+# halves must be commented, and CI regenerated, per pass.
+#
+# There is NO windows/arm64 pass. Upstream ships exactly ONE Windows asset —
+# `cargo-cyclonedx-x86_64-pc-windows-msvc.zip` — in every in-range release; no
+# `aarch64-pc-windows-msvc` asset has ever existed. So this mirror declares FIVE
+# platforms, not six, and windows/arm64 is genuinely absent rather than staged.
+#
+# A future package here whose libc measurement differs must restate this whole
+# block in its own spec — see the shallow-merge warning at the top.
+platforms:
+  linux/amd64:
+    runner: ubuntu-latest
+    containers:
+      - image: "ubuntu:24.04"
+        shell: bash
+        setup:
+          - apt-get update
+          - apt-get install -y --no-install-recommends cargo
+      - image: "alpine:3.20"
+        shell: sh
+        setup:
+          - apk add --no-cache cargo
+      - image: "fedora:40"
+        shell: bash
+        setup:
+          - dnf install -y cargo
+  "linux/arm64+libc.glibc":
+    # arm64 container legs run natively — no qemu — so the runner arch must
+    # match the platform or the renderer reds the leg up front.
+    runner: ubuntu-24.04-arm
+    containers:
+      # No alpine leg: this key REQUIRES glibc, and a glibc-dynamic binary
+      # cannot load under musl. Both images clear the measured GLIBC_2.34 floor
+      # (ubuntu 24.04 → 2.39, fedora 40 → 2.39).
+      - image: "ubuntu:24.04"
+        shell: bash
+        setup:
+          - apt-get update
+          - apt-get install -y --no-install-recommends cargo
+      - image: "fedora:40"
+        shell: bash
+        setup:
+          - dnf install -y cargo
+  # ── PASS 2 (darwin) — staged, uncomment together with the `assets:` keys ───
+  # darwin/amd64:
+  #   # Intel slice tested on the arm64 macos-14 runner via Rosetta 2 —
+  #   # GitHub's native macos-13 Intel pool is exhausted and deadlocks push.
+  #   runner: macos-14
+  #   prefix: ["arch", "-x86_64"]
+  # darwin/arm64:
+  #   runner: macos-14
+  #   shell: bash
+  # ── PASS 3 (windows) — staged, uncomment together with the `assets:` key ───
+  # windows/amd64:
+  #   runner: windows-latest
+  #   shell: pwsh
+  #
+  # No `containers:` on darwin or windows — those runners have no Linux
+  # container engine, and the key is rejected at spec load. Those legs run
+  # directly on the GitHub-hosted image, which ships a Rust toolchain, so the
+  # `cargo metadata` dependency is already satisfied there without `setup:`.
+
+notify:
+  discord:
+    webhook_secret: OCX_MIRROR_DISCORD_HOOK
+    user_id: "227748867204972545"  # pinged in-message on failures
