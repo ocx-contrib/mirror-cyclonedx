@@ -107,7 +107,7 @@ concurrency:
 # darwin/windows keys are commented out below AND in cargo-cyclonedx/mirror.yml's
 # `assets:` block, and get uncommented one pass at a time. A declared platform
 # with no matching asset regex does NOT quietly self-skip: it boots a real
-# macos-14 / windows runner and reports SUCCESS having tested nothing. Both
+# macos-15 / windows runner and reports SUCCESS having tested nothing. Both
 # halves must be commented, and CI regenerated, per pass.
 #
 # There is NO windows/arm64 pass. Upstream ships exactly ONE Windows asset —
@@ -153,12 +153,12 @@ platforms:
           - dnf install -y cargo
   # ── PASS 2 (darwin) — LANDED ──────────────────────────────────────────────
   darwin/amd64:
-    # Intel slice tested on the arm64 macos-14 runner via Rosetta 2 —
+    # Intel slice tested on the arm64 macos-15 runner via Rosetta 2 —
     # GitHub's native macos-13 Intel pool is exhausted and deadlocks push.
-    runner: macos-14
+    runner: macos-15
     prefix: ["arch", "-x86_64"]
   darwin/arm64:
-    runner: macos-14
+    runner: macos-15
     shell: bash
   # ── PASS 3 (windows) — LANDED. amd64 only; upstream ships no aarch64 PE. ───
   windows/amd64:
