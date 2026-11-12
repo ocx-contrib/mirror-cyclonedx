@@ -99,7 +99,10 @@ expect.ok(r_gen)
 bom = ocx.read_file("proj/ocxbom.json")
 expect.eq(bom.count("\"bomFormat\": \"CycloneDX\""), 1)
 expect.eq(bom.count("\"specVersion\": \"1.5\""), 1)
-expect.eq(bom.count("\"expression\": \"MIT\""), 1)
+# License: 1 on <= 0.5.9 (crate component only), 2 from 0.5.10 — the `bin`
+# target subcomponent now inherits its package's license (upstream #876).
+# Measured: 0.5.10 linux musl → 2. Either is correct; 0 or 3+ is not.
+expect.true(bom.count("\"expression\": \"MIT\"") in (1, 2))
 # The purl is SYNTHESISED — `pkg:cargo/<name>@<version>` is assembled from two
 # separate manifest fields into purl syntax. A tool that merely copied its input
 # through could not produce it, which is what makes this more than an echo test.
